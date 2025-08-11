@@ -60,13 +60,40 @@ function PLUGIN:PostInstall(ctx)
         end
         
         -- Download yarn.js
-        local yarn_file = bin_dir .. "/yarn"
-        if not download_file(yarn_url, yarn_file) then
+        local yarn_js_file = bin_dir .. "/yarn.js"
+        if not download_file(yarn_url, yarn_js_file) then
             error("Failed to download Yarn v2+")
         end
         
-        -- Make executable (Unix only, not needed on Windows)
-        if not is_windows then
+        -- Create wrapper script
+        if is_windows then
+            -- Create yarn.cmd wrapper for Windows
+            local yarn_cmd = bin_dir .. "/yarn.cmd"
+            local cmd_file = io.open(yarn_cmd, "w")
+            if cmd_file then
+                cmd_file:write("@echo off\n")
+                cmd_file:write('node "%~dp0yarn.js" %*\n')
+                cmd_file:close()
+            end
+            
+            -- Also create yarn without extension for Git Bash
+            local yarn_sh = bin_dir .. "/yarn"
+            local sh_file = io.open(yarn_sh, "w")
+            if sh_file then
+                sh_file:write("#!/bin/sh\n")
+                sh_file:write('exec node "$(dirname "$0")/yarn.js" "$@"\n')
+                sh_file:close()
+            end
+        else
+            -- Create shell wrapper for Unix
+            local yarn_file = bin_dir .. "/yarn"
+            local wrapper_file = io.open(yarn_file, "w")
+            if wrapper_file then
+                wrapper_file:write("#!/bin/sh\n")
+                wrapper_file:write('exec node "$(dirname "$0")/yarn.js" "$@"\n')
+                wrapper_file:close()
+            end
+            -- Make executable
             os.execute("chmod +x " .. yarn_file)
         end
     end
