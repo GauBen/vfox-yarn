@@ -1,6 +1,9 @@
 --- Pre-installation hook (also performs installation)
 PLUGIN = {}
 
+local http = require("vfox.http")
+local archive = require("vfox.archive")
+
 local function commandExists(cmd)
     local handle = io.popen("command -v " .. cmd .. " >/dev/null 2>&1 && echo 'yes' || echo 'no'")
     if handle then
@@ -15,60 +18,67 @@ end
 local function installYarnV1(version, install_path, temp_dir)
     local archive_name = "yarn-v" .. version .. ".tar.gz"
     local archive_url = "https://classic.yarnpkg.com/downloads/" .. version .. "/" .. archive_name
-    local signature_url = archive_url .. ".asc"
+    local archive_path = temp_dir .. "/" .. archive_name
     
-    -- Download archive
-    local download_cmd
-    if commandExists("wget") then
-        download_cmd = "wget -q -O " .. temp_dir .. "/" .. archive_name .. " " .. archive_url
-    else
-        download_cmd = "curl -sSL -o " .. temp_dir .. "/" .. archive_name .. " " .. archive_url
-    end
-    
-    local result = os.execute(download_cmd)
-    if result ~= 0 and result ~= true then
-        error("Failed to download Yarn archive")
+    -- Download archive using vfox's http module
+    local err = http.download_file({
+        url = archive_url,
+        file_path = archive_path
+    })
+    if err ~= nil then
+        error("Failed to download Yarn archive: " .. err)
     end
     
     -- GPG verification (if not skipped)
-    if os.getenv("MISE_YARN_SKIP_GPG") == nil then
+    if os.getenv("MISE_YARN_SKIP_GPG") == nil and commandExists("gpg") then
         -- Download signature
-        if commandExists("wget") then
-            os.execute("wget -q -O " .. temp_dir .. "/" .. archive_name .. ".asc " .. signature_url)
+        local signature_url = archive_url .. ".asc"
+        local signature_path = temp_dir .. "/" .. archive_name .. ".asc"
+        
+        err = http.download_file({
+            url = signature_url,
+            file_path = signature_path
+        })
+        if err ~= nil then
+            print("⚠️  Warning: Could not download signature file")
         else
-            os.execute("curl -sSL -o " .. temp_dir .. "/" .. archive_name .. ".asc " .. signature_url)
-        end
-        
-        -- Import GPG key
-        local keyring_dir = os.getenv("HOME") .. "/.cache/vfox-yarn/keyrings"
-        os.execute("mkdir -p " .. keyring_dir .. " && chmod 0700 " .. keyring_dir)
-        
-        if commandExists("wget") then
-            os.execute("wget -q -O - https://dl.yarnpkg.com/debian/pubkey.gpg | GNUPGHOME=" .. keyring_dir .. " gpg --import 2>/dev/null")
-        else
-            os.execute("curl -sSL https://dl.yarnpkg.com/debian/pubkey.gpg | GNUPGHOME=" .. keyring_dir .. " gpg --import 2>/dev/null")
-        end
-        
-        -- Verify signature
-        local verify_result = os.execute("GNUPGHOME=" .. keyring_dir .. " gpg --verify " .. temp_dir .. "/" .. archive_name .. ".asc " .. temp_dir .. "/" .. archive_name .. " 2>/dev/null")
-        if verify_result ~= 0 and verify_result ~= true then
-            print("⚠️  GPG verification failed. Set MISE_YARN_SKIP_GPG=1 to skip verification")
-            error("GPG signature verification failed")
+            -- Import GPG key
+            local keyring_dir = os.getenv("HOME") .. "/.cache/vfox-yarn/keyrings"
+            os.execute("mkdir -p " .. keyring_dir .. " && chmod 0700 " .. keyring_dir)
+            
+            -- Download and import GPG key
+            local gpg_key_path = temp_dir .. "/pubkey.gpg"
+            err = http.download_file({
+                url = "https://dl.yarnpkg.com/debian/pubkey.gpg",
+                file_path = gpg_key_path
+            })
+            if err == nil then
+                os.execute("GNUPGHOME=" .. keyring_dir .. " gpg --import " .. gpg_key_path .. " 2>/dev/null")
+                
+                -- Verify signature
+                local verify_result = os.execute("GNUPGHOME=" .. keyring_dir .. " gpg --verify " .. signature_path .. " " .. archive_path .. " 2>/dev/null")
+                if verify_result ~= 0 and verify_result ~= true then
+                    print("⚠️  GPG verification failed. Set MISE_YARN_SKIP_GPG=1 to skip verification")
+                    error("GPG signature verification failed")
+                end
+            end
         end
     end
-    
-    -- Extract archive
-    os.execute("cd " .. temp_dir .. " && tar xzf " .. archive_name .. " --strip-components=1 --no-same-owner")
-    
-    -- Remove archive files
-    os.execute("rm -f " .. temp_dir .. "/" .. archive_name .. " " .. temp_dir .. "/" .. archive_name .. ".asc")
     
     -- Create installation directory
     os.execute("rm -rf " .. install_path .. " 2>/dev/null")
     os.execute("mkdir -p " .. install_path)
     
-    -- Move files to installation directory
-    os.execute("cp -r " .. temp_dir .. "/* " .. install_path .. "/")
+    -- Extract archive using vfox's archive module
+    err = archive.decompress(archive_path, install_path, {
+        strip_components = 1
+    })
+    if err ~= nil then
+        error("Failed to extract Yarn archive: " .. err)
+    end
+    
+    -- Clean up
+    os.execute("rm -f " .. archive_path .. " " .. archive_path .. ".asc")
 end
 
 --- Install Yarn v2+ (Berry)
@@ -76,17 +86,13 @@ local function installYarnV2Plus(version, install_path, temp_dir)
     local yarn_url = "https://repo.yarnpkg.com/" .. version .. "/packages/yarnpkg-cli/bin/yarn.js"
     local yarn_file = temp_dir .. "/yarn.js"
     
-    -- Download yarn.js
-    local download_cmd
-    if commandExists("wget") then
-        download_cmd = "wget -q -O " .. yarn_file .. " " .. yarn_url
-    else
-        download_cmd = "curl -sSL -o " .. yarn_file .. " " .. yarn_url
-    end
-    
-    local result = os.execute(download_cmd)
-    if result ~= 0 and result ~= true then
-        error("Failed to download Yarn")
+    -- Download yarn.js using vfox's http module
+    local err = http.download_file({
+        url = yarn_url,
+        file_path = yarn_file
+    })
+    if err ~= nil then
+        error("Failed to download Yarn: " .. err)
     end
     
     -- Create installation directory structure
@@ -101,20 +107,10 @@ end
 function PLUGIN:PreInstall(ctx)
     local version = ctx.version
     
-    -- Check for required tools
-    if not commandExists("tar") then
-        error("Missing required dependency: tar")
-    end
-    
-    if not commandExists("wget") and not commandExists("curl") then
-        error("Missing one of either of the following dependencies: wget, curl")
-    end
-    
     local major_version = string.sub(version, 1, 1)
     if major_version == "1" and os.getenv("MISE_YARN_SKIP_GPG") == nil then
         if not commandExists("gpg") then
             print("⚠️  Warning: gpg not found. Set MISE_YARN_SKIP_GPG=1 to skip GPG verification")
-            error("Missing required dependency: gpg (or set MISE_YARN_SKIP_GPG to skip verification)")
         end
     end
     
