@@ -4,13 +4,29 @@ PLUGIN = {}
 local function fetch_github_tags(repo_url)
     -- Use git ls-remote to get tags
     local cmd = 'git ls-remote --refs --tags "' .. repo_url .. '"'
-    local handle = io.popen(cmd .. " 2>/dev/null")
+    
+    -- Detect Windows
+    local is_windows = package.config:sub(1,1) == '\\'
+    
+    -- Redirect stderr appropriately for the platform
+    if is_windows then
+        cmd = cmd .. " 2>NUL"
+    else
+        cmd = cmd .. " 2>/dev/null"
+    end
+    
+    local handle = io.popen(cmd)
     if not handle then
         return {}
     end
     
     local result = handle:read("*a")
     handle:close()
+    
+    -- If result is empty or nil, return empty table
+    if not result or result == "" then
+        return {}
+    end
     
     local tags = {}
     for line in result:gmatch("[^\r\n]+") do
