@@ -7,7 +7,7 @@ end
 
 local function download_file(url, output_path)
     -- Detect Windows
-    local is_windows = package.config:sub(1,1) == '\\'
+    local is_windows = package.config:sub(1, 1) == '\\'
     local stderr_redirect = is_windows and " 2>NUL" or " 2>/dev/null"
 
     -- Try curl first (more likely to be available on Windows via Git Bash)
@@ -24,16 +24,12 @@ end
 
 local function get_target_platform()
     -- Detect platform and architecture for Yarn v6+ binary downloads
-    local is_windows = package.config:sub(1,1) == '\\'
+    -- Available targets: aarch64-apple-darwin, aarch64-unknown-linux-musl,
+    -- i686-unknown-linux-musl, x86_64-unknown-linux-musl
+    local is_windows = package.config:sub(1, 1) == '\\'
 
     if is_windows then
-        -- Windows detection
-        local arch = os.getenv("PROCESSOR_ARCHITECTURE") or "x86_64"
-        if arch:match("ARM64") then
-            return "aarch64-pc-windows-gnu"
-        else
-            return "x86_64-pc-windows-gnu"
-        end
+        error("Yarn v6+ does not support Windows binaries at this time.")
     else
         -- Unix-like systems (Linux, macOS, etc.)
         local handle = io.popen("uname -ms 2>/dev/null")
@@ -43,12 +39,17 @@ local function get_target_platform()
         if result:match("Darwin arm64") or result:match("Darwin aarch64") then
             return "aarch64-apple-darwin"
         elseif result:match("Darwin") then
-            return "x86_64-apple-darwin"
+            -- Intel macOS is not supported in Yarn v6+
+            error("Yarn v6+ only supports ARM64 (Apple Silicon) macOS. Your system is x86_64 Intel.")
         elseif result:match("Linux aarch64") or result:match("Linux arm64") then
             return "aarch64-unknown-linux-musl"
-        else
-            -- Default to x86_64 Linux
+        elseif result:match("Linux i686") or result:match("Linux i386") then
+            return "i686-unknown-linux-musl"
+        elseif result:match("Linux") then
+            -- Default to x86_64 for Linux if not explicitly detected as 32-bit
             return "x86_64-unknown-linux-musl"
+        else
+            error("Unsupported platform: " .. result)
         end
     end
 end
@@ -78,52 +79,9 @@ function PLUGIN:PostInstall(ctx)
     end
 
     local major_version = string.sub(version, 1, 1)
-    local is_windows = package.config:sub(1,1) == '\\'
+    local is_windows = package.config:sub(1, 1) == '\\'
 
-    if major_version == "6" or (tonumber(major_version) and tonumber(major_version) >= 6) then
-        -- Yarn ZPM (v6+) - download pre-compiled Rust binary
-        local target = get_target_platform()
-        local yarn_url = "https://repo.yarnpkg.com/releases/" .. version .. "/" .. target
-
-        -- Create bin directory (cross-platform)
-        local bin_dir = install_path .. "/bin"
-        if is_windows then
-            os.execute('mkdir "' .. bin_dir .. '" 2>NUL')
-        else
-            os.execute("mkdir -p " .. bin_dir)
-        end
-
-        -- Download and extract the binary
-        local archive_path = bin_dir .. "/yarn.zip"
-        if not download_file(yarn_url, archive_path) then
-            error("Failed to download Yarn v6+ from " .. yarn_url)
-        end
-
-        -- Extract the zip file
-        if is_windows then
-            -- Use PowerShell to extract zip on Windows
-            local ps_cmd = 'powershell -Command "Expand-Archive -Path ' .. archive_path .. ' -DestinationPath ' .. bin_dir .. ' -Force" 2>NUL'
-            if not exec_success(os.execute(ps_cmd)) then
-                -- Fallback to unzip if available
-                os.execute("cd " .. bin_dir .. " && unzip -q yarn.zip 2>NUL")
-            end
-        else
-            -- Use unzip on Unix-like systems
-            os.execute("unzip -q " .. archive_path .. " -d " .. bin_dir)
-        end
-
-        -- Clean up archive
-        if is_windows then
-            os.execute('del "' .. archive_path .. '" 2>NUL')
-        else
-            os.execute("rm -f " .. archive_path)
-        end
-
-        -- Make the binary executable on Unix-like systems
-        if not is_windows then
-            os.execute("chmod +x " .. bin_dir .. "/yarn")
-        end
-    elseif major_version ~= "1" then
+    if major_version == "2" or major_version == "3" or major_version == "4" or major_version == "5" then
         -- Yarn Berry (v2.x+) - download single JS file
         local yarn_url = "https://repo.yarnpkg.com/" .. version .. "/packages/yarnpkg-cli/bin/yarn.js"
 
@@ -172,6 +130,28 @@ function PLUGIN:PostInstall(ctx)
             -- Make executable
             os.execute("chmod +x " .. yarn_file)
         end
+    elseif major_version ~= "1" then
+        -- Yarn ZPM (v6+) - download pre-compiled Rust binary from NPM
+        local target = get_target_platform()
+        local npm_url = "https://registry.npmjs.org/@yarnpkg/yarn-" ..
+        target .. "/-/yarn-" .. target .. "-" .. version .. ".tgz"
+
+        -- Create bin directory
+        local bin_dir = install_path .. "/bin"
+        os.execute("mkdir -p " .. bin_dir)
+
+        -- Download the binary tarball
+        local archive_path = bin_dir .. "/yarn.tar.gz"
+        if not download_file(npm_url, archive_path) then
+            error("Failed to download Yarn " .. version .. " from npm (" .. npm_url .. ")")
+        end
+
+        -- Extract the tar.gz file
+        if not exec_success(os.execute("tar -xzf " .. archive_path .. " -C " .. bin_dir)) then
+            error("Failed to extract Yarn binary. Ensure tar is installed.")
+        end
+
+        os.execute("rm -f " .. archive_path)
     end
 
     return {}
