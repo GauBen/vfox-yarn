@@ -151,49 +151,9 @@ function PLUGIN:PostInstall(ctx)
             error("Failed to extract Yarn binary. Ensure tar is installed.")
         end
 
-        os.execute("rm -f " .. archive_path)
-
-        -- NPM package structure: package/bin/yarn
-        -- Repo structure: {binary} in root
-        -- Handle both cases by finding and moving the yarn binary
-        local yarn_binary = bin_dir .. "/yarn"
-        local found_binary = false
-
-        -- Check for NPM package structure (package/bin/yarn-bin)
-        if not is_windows then
-            local npm_path = bin_dir .. "/package/bin/yarn"
-            local check_npm = "test -f " .. npm_path
-            if exec_success(os.execute(check_npm)) then
-                os.execute("mv " .. npm_path .. " " .. yarn_binary)
-                os.execute("rm -rf " .. bin_dir .. "/package")
-                found_binary = true
-            end
-        end
-
-        -- Check for direct binary
-        if not is_windows and not found_binary then
-            local check_cmd = "test -f " .. yarn_binary
-            if exec_success(os.execute(check_cmd)) then
-                found_binary = true
-            end
-        elseif is_windows then
-            -- On Windows, binary might be yarn.exe
-            local yarn_exe = bin_dir .. "/yarn.exe"
-            if exec_success(os.execute('test -f "' .. yarn_exe .. '" 2>NUL')) then
-                found_binary = true
-            end
-        end
-
-        -- Verify binary exists before making it executable
-        if not is_windows then
-            if found_binary then
-                os.execute("chmod +x " .. yarn_binary)
-            else
-                error("Yarn binary not found at " .. yarn_binary .. " after extraction")
-            end
-        elseif not found_binary then
-            error("Yarn binary not found after extraction")
-        end
+        -- Move /package/yarn to /bin/yarn and clean up
+        os.execute("mv " .. bin_dir .. "/package/yarn " .. bin_dir .. "/yarn")
+        os.execute("rm -rf " .. bin_dir .. "/package " .. archive_path)
     end
 
     return {}
