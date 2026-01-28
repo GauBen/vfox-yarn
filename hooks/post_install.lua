@@ -134,13 +134,13 @@ function PLUGIN:PostInstall(ctx)
         -- Yarn ZPM (v6+) - download pre-compiled Rust binary from NPM
         local target = get_target_platform()
         local npm_url = "https://registry.npmjs.org/@yarnpkg/yarn-" ..
-        target .. "/-/yarn-" .. target .. "-" .. version .. ".tgz"
+            target .. "/-/yarn-" .. target .. "-" .. version .. ".tgz"
 
         -- Create bin directory
         local bin_dir = install_path .. "/bin"
         os.execute("mkdir -p " .. bin_dir)
 
-        -- Download the binary tarball
+        -- Download the binary (tar.gz from NPM or repo)
         local archive_path = bin_dir .. "/yarn.tar.gz"
         if not download_file(npm_url, archive_path) then
             error("Failed to download Yarn " .. version .. " from npm (" .. npm_url .. ")")
@@ -152,6 +152,48 @@ function PLUGIN:PostInstall(ctx)
         end
 
         os.execute("rm -f " .. archive_path)
+
+        -- NPM package structure: package/bin/yarn
+        -- Repo structure: {binary} in root
+        -- Handle both cases by finding and moving the yarn binary
+        local yarn_binary = bin_dir .. "/yarn"
+        local found_binary = false
+
+        -- Check for NPM package structure (package/bin/yarn-bin)
+        if not is_windows then
+            local npm_path = bin_dir .. "/package/bin/yarn"
+            local check_npm = "test -f " .. npm_path
+            if exec_success(os.execute(check_npm)) then
+                os.execute("mv " .. npm_path .. " " .. yarn_binary)
+                os.execute("rm -rf " .. bin_dir .. "/package")
+                found_binary = true
+            end
+        end
+
+        -- Check for direct binary
+        if not is_windows and not found_binary then
+            local check_cmd = "test -f " .. yarn_binary
+            if exec_success(os.execute(check_cmd)) then
+                found_binary = true
+            end
+        elseif is_windows then
+            -- On Windows, binary might be yarn.exe
+            local yarn_exe = bin_dir .. "/yarn.exe"
+            if exec_success(os.execute('test -f "' .. yarn_exe .. '" 2>NUL')) then
+                found_binary = true
+            end
+        end
+
+        -- Verify binary exists before making it executable
+        if not is_windows then
+            if found_binary then
+                os.execute("chmod +x " .. yarn_binary)
+            else
+                error("Yarn binary not found at " .. yarn_binary .. " after extraction")
+            end
+        elseif not found_binary then
+            error("Yarn binary not found after extraction")
+        end
     end
 
     return {}
